@@ -1,0 +1,63 @@
+import hashlib
+import json
+import os
+from contextlib import asynccontextmanager
+
+import boto3
+from botocore.config import Config
+from botocore.exceptions import BotoCoreError, ClientError
+from fastapi import FastAPI, Header, HTTPException
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class Telemetry(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    device_id: str = Field(min_length=1, max_length=128)
+    event_type: str = Field(min_length=1, max_length=128)
+    payload: dict = Field(default_factory=dict)
+
+
+def create_app(sqs=None, queue_url=None):
+    @asynccontextmanager
+    async def lifespan(app):
+        app.state.sqs = sqs if sqs is not None else boto3.client(
+            "sqs", region_name=os.getenv("AWS_DEFAULT_REGION", "us-east-1"),
+            endpoint_url=os.getenv("AWS_ENDPOINT_URL") or None,
+            config=Config(connect_timeout=2, read_timeout=3, retries={"max_attempts": 2}),
+        )
+        app.state.queue_url = queue_url or app.state.sqs.get_queue_url(
+            QueueName=os.getenv("QUEUE_NAME", "telemetry-events"))["QueueUrl"]
+        yield
+
+    app = FastAPI(title="Telemetry ingestion", lifespan=lifespan)
+
+    @app.get("/healthz")
+    def health():
+        try:
+            app.state.sqs.get_queue_attributes(QueueUrl=app.state.queue_url, AttributeNames=["QueueArn"])
+        except (BotoCoreError, ClientError):
+            raise HTTPException(503, "Queue unavailable")
+        return {"status": "ok"}
+
+    @app.post("/ingest", status_code=202)
+    def ingest(event: Telemetry, idempotency_key: str | None = Header(default=None, min_length=1, max_length=256)):
+        try:
+            canonical = json.dumps(event.model_dump(), sort_keys=True, separators=(",", ":"), allow_nan=False)
+        except (ValueError, TypeError):
+            raise HTTPException(422, "Payload must contain valid JSON values")
+        # A supplied key is scoped by device. First accepted payload wins for a reused key.
+        identity = json.dumps([event.device_id, idempotency_key]) if idempotency_key is not None else canonical
+        event_id = hashlib.sha256(identity.encode()).hexdigest()
+        body = json.dumps({**event.model_dump(), "event_id": event_id}, allow_nan=False)
+        if len(body.encode()) > 200_000:
+            raise HTTPException(413, "Event exceeds 200 KB")
+        try:
+            app.state.sqs.send_message(QueueUrl=app.state.queue_url, MessageBody=body)
+        except (BotoCoreError, ClientError):
+            raise HTTPException(503, "Queue unavailable; retry with the same idempotency key")
+        return {"event_id": event_id, "status": "queued"}
+
+    return app
+
+
+app = create_app()

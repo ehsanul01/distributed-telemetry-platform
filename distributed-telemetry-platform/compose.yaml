@@ -1,0 +1,60 @@
+name: telemetry-platform
+x-aws: &aws
+  AWS_ACCESS_KEY_ID: test
+  AWS_SECRET_ACCESS_KEY: test
+  AWS_DEFAULT_REGION: us-east-1
+  AWS_ENDPOINT_URL: http://localstack:4566
+  QUEUE_NAME: telemetry-events
+  TABLE_NAME: telemetry-events
+services:
+  localstack:
+    image: localstack/localstack:4.4.0
+    environment:
+      SERVICES: sqs,dynamodb,apigateway
+      # Terraform expects /account/queue; this local environment uses one region.
+      SQS_ENDPOINT_STRATEGY: "off"
+      LOCALSTACK_HOST: localstack:4566
+    ports:
+      - "127.0.0.1:4566:4566"
+    healthcheck:
+      test: ["CMD-SHELL", "awslocal sqs list-queues >/dev/null && awslocal dynamodb list-tables >/dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+  terraform:
+    image: hashicorp/terraform:1.9.8
+    working_dir: /infra
+    volumes:
+      - ./terraform:/infra
+    profiles: [tools]
+    depends_on:
+      localstack:
+        condition: service_healthy
+  producer:
+    build: ./services/producer
+    environment: *aws
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      localstack:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz', timeout=4)"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+  worker:
+    build: ./services/worker
+    environment:
+      <<: *aws
+      WORKER_CONCURRENCY: "4"
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      localstack:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/worker", "healthcheck"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
