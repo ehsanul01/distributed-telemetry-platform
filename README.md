@@ -100,27 +100,6 @@ Reusing an idempotency key with a different payload retains whichever event is s
 - GitHub Actions workflow defining tests, infrastructure validation, container builds, and integration checks.
 - Optional ECS Fargate worker module, not yet verified in AWS.
 
-## Validation
-
-The following checks passed during local development:
-
-| Check | Result |
-| --- | --- |
-| Python API unit tests | Passed |
-| Go worker tests with race detection | Passed |
-| Terraform formatting and validation | Passed |
-| Local infrastructure provisioning | Successfully applied 10 resources |
-| Producer and worker Docker builds | Passed |
-| Container health checks | All three services healthy |
-| End-to-end ingestion and persistence | Passed |
-| Automatic retries and dead-letter delivery | Passed |
-| API Gateway request | Returned HTTP 202 |
-| Duplicate-processing integration check | Three deliveries produced one stored record |
-| Load-harness functional check | Accepted 20 of 20 requests in the host-based mock environment |
-
-The small load-harness check verifies functionality; it does not establish production capacity.
-
-The GitHub Actions workflow is included, but a successful execution on GitHub has not been verified. No real AWS resources have been deployed.
 
 ## Engineering Skills Demonstrated
 
