@@ -25,7 +25,7 @@ curl http://localhost:8000/ingest -H 'Content-Type: application/json' \
 
 The API returns `202` and an `event_id` once SQS accepts the message; this does not mean database processing has completed.
 
-Terraform also creates API Gateway with `POST /v1/ingest`. To exercise that route inside the Docker network, obtain `api_id` with `docker compose run --rm terraform output -raw api_id`, then send a request to `http://localstack:4566/restapis/API_ID/v1/_user_request_/ingest`. Direct producer access is the default for local tests.
+Terraform also creates an API Gateway with `POST /v1/ingest`. To exercise that route inside the Docker network, obtain `api_id` with `docker compose run --rm terraform output -raw api_id`, then send a request to `http://localstack:4566/restapis/API_ID/v1/_user_request_/ingest`. Direct producer access is the default for local tests.
 
 Stop with `make down`. LocalStack data is ephemeral: setup reapplies Terraform on the next run to recreate missing resources. Terraform state stays in `terraform/` and is ignored by Git. This Compose setup does not mount the Docker socket or enable LocalStack persistence.
 
@@ -75,6 +75,9 @@ make loadtest
 ```
 
 The load report is written to `loadtest/report.md`. It measures HTTP acceptance latency and request throughput, not completed database writes. Failed requests cause a nonzero exit. Options include `--requests`, `--concurrency`, `--url`, and `--output`.
+
+
+
 
 ## Optional real AWS infrastructure
 
