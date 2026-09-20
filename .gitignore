@@ -1,0 +1,10 @@
+.DS_Store
+__pycache__/
+.pytest_cache/
+.venv/
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+.env
+loadtest/report.md
