@@ -24,10 +24,11 @@ import (
 )
 
 type Event struct {
-	EventID   string                     `json:"event_id"`
-	DeviceID  string                     `json:"device_id"`
-	EventType string                     `json:"event_type"`
-	Payload   map[string]json.RawMessage `json:"payload"`
+	ReceivedAt *time.Time                 `json:"received_at,omitempty"`
+	EventID    string                     `json:"event_id"`
+	DeviceID   string                     `json:"device_id"`
+	EventType  string                     `json:"event_type"`
+	Payload    map[string]json.RawMessage `json:"payload"`
 }
 type Store interface {
 	Put(context.Context, Event) error
@@ -45,14 +46,21 @@ func (s dynamoStore) Put(ctx context.Context, e Event) error {
 	if err != nil {
 		return err
 	}
+	item := map[string]dt.AttributeValue{
+		"event_id":   &dt.AttributeValueMemberS{Value: e.EventID},
+		"device_id":  &dt.AttributeValueMemberS{Value: e.DeviceID},
+		"event_type": &dt.AttributeValueMemberS{Value: e.EventType},
+		"payload":    &dt.AttributeValueMemberS{Value: string(payload)},
+		// Time of the write attempt that first succeeds, not a database commit timestamp.
+		"processed_at": &dt.AttributeValueMemberS{Value: time.Now().UTC().Format(time.RFC3339Nano)},
+	}
+	// Legacy queued messages have no known API receipt time.
+	if e.ReceivedAt != nil {
+		item["received_at"] = &dt.AttributeValueMemberS{Value: e.ReceivedAt.UTC().Format(time.RFC3339Nano)}
+	}
 	_, err = s.client.PutItem(ctx, &dynamodb.PutItemInput{
 		TableName: aws.String(s.table), ConditionExpression: aws.String("attribute_not_exists(event_id)"),
-		Item: map[string]dt.AttributeValue{
-			"event_id":   &dt.AttributeValueMemberS{Value: e.EventID},
-			"device_id":  &dt.AttributeValueMemberS{Value: e.DeviceID},
-			"event_type": &dt.AttributeValueMemberS{Value: e.EventType},
-			"payload":    &dt.AttributeValueMemberS{Value: string(payload)},
-		},
+		Item: item,
 	})
 	var duplicate *dt.ConditionalCheckFailedException
 	if errors.As(err, &duplicate) {

@@ -2,6 +2,7 @@ import hashlib
 import json
 import os
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 
 import boto3
 from botocore.config import Config
@@ -41,6 +42,7 @@ def create_app(sqs=None, queue_url=None):
 
     @app.post("/ingest", status_code=202)
     def ingest(event: Telemetry, idempotency_key: str | None = Header(default=None, min_length=1, max_length=256)):
+        received_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         try:
             canonical = json.dumps(event.model_dump(), sort_keys=True, separators=(",", ":"), allow_nan=False)
         except (ValueError, TypeError):
@@ -48,7 +50,7 @@ def create_app(sqs=None, queue_url=None):
         # A supplied key is scoped by device. First accepted payload wins for a reused key.
         identity = json.dumps([event.device_id, idempotency_key]) if idempotency_key is not None else canonical
         event_id = hashlib.sha256(identity.encode()).hexdigest()
-        body = json.dumps({**event.model_dump(), "event_id": event_id}, allow_nan=False)
+        body = json.dumps({**event.model_dump(), "event_id": event_id, "received_at": received_at}, allow_nan=False)
         if len(body.encode()) > 200_000:
             raise HTTPException(413, "Event exceeds 200 KB")
         try:

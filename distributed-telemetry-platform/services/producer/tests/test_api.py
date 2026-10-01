@@ -51,3 +51,39 @@ def test_queue_failure(api, monkeypatch):
     assert client.post("/ingest", json={"device_id":"r1","event_type":"up"}).status_code == 503
     monkeypatch.setattr(sqs, "get_queue_attributes", fail)
     assert client.get("/healthz").status_code == 503
+
+
+@pytest.mark.parametrize("key", [None, "stable-key"])
+def test_received_at_is_utc_and_does_not_change_identity(api, monkeypatch, key):
+    import hashlib
+    from datetime import datetime, timezone
+    import app.main as producer
+
+    instants = iter([
+        datetime(2026, 9, 30, 10, 0, 0, tzinfo=timezone.utc),
+        datetime(2026, 9, 30, 11, 0, 0, tzinfo=timezone.utc),
+    ])
+    class Clock:
+        @staticmethod
+        def now(tz):
+            assert tz == timezone.utc
+            return next(instants)
+    monkeypatch.setattr(producer, "datetime", Clock)
+    client, sqs, url = api
+    event = {"device_id": "r1", "event_type": "up", "payload": {}}
+    headers = {"Idempotency-Key": key} if key else {}
+    responses = [client.post("/ingest", json=event, headers=headers) for _ in range(2)]
+    assert all(res.status_code == 202 for res in responses)
+    identity = json.dumps(["r1", key]) if key else json.dumps(event, sort_keys=True, separators=(",", ":"))
+    expected_id = hashlib.sha256(identity.encode()).hexdigest()
+    assert all(res.json()["event_id"] == expected_id for res in responses)
+    messages = sqs.receive_message(QueueUrl=url, MaxNumberOfMessages=10)["Messages"]
+    bodies = [json.loads(msg["Body"]) for msg in messages]
+    assert {body["received_at"] for body in bodies} == {"2026-09-30T10:00:00Z", "2026-09-30T11:00:00Z"}
+    assert all(body["event_id"] == expected_id for body in bodies)
+
+
+def test_client_cannot_supply_received_at(api):
+    client, _, _ = api
+    response = client.post("/ingest", json={"device_id": "r1", "event_type": "up", "received_at": "2020-01-01T00:00:00Z"})
+    assert response.status_code == 422

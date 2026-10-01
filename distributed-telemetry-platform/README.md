@@ -99,3 +99,9 @@ References: [LocalStack Terraform configuration](https://docs.localstack.cloud/a
 See [VERIFICATION.md](VERIFICATION.md) for checks actually performed and remaining environment-dependent checks.
 
 Local queue URLs use `SQS_ENDPOINT_STRATEGY="off"` so Terraform receives `/account-id/queue-name` paths. The `path` strategy adds `/queue/region/`, which the pinned AWS provider rejects. This local setup uses only `us-east-1`.
+
+## Event timestamps
+
+New reports carry a server-generated `received_at` timestamp from the Python API. The Go worker stores it alongside `processed_at`, the UTC time of the write attempt that first succeeds. Both are RFC 3339 strings (for example, `2026-09-30T10:00:00.123456Z`). `processed_at` is an application timestamp, not an exact database commit time; clock differences mean it should not be treated as a guaranteed latency measurement.
+
+Timestamps are metadata and do not participate in event ID generation. The existing conditional write preserves the entire first stored record, including both timestamps, on duplicate delivery. Repeated API submissions may carry different receipt times but keep the same event ID. An older queued message without `received_at` is still processed: it gets `processed_at`, while the unknown receipt time is omitted. Existing database records are not backfilled. Clients cannot set `received_at` through `/ingest`; malformed timestamps in directly queued messages follow the normal retry/DLQ path.
