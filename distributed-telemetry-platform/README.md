@@ -105,3 +105,40 @@ Local queue URLs use `SQS_ENDPOINT_STRATEGY="off"` so Terraform receives `/accou
 New reports carry a server-generated `received_at` timestamp from the Python API. The Go worker stores it alongside `processed_at`, the UTC time of the write attempt that first succeeds. Both are RFC 3339 strings (for example, `2026-09-30T10:00:00.123456Z`). `processed_at` is an application timestamp, not an exact database commit time; clock differences mean it should not be treated as a guaranteed latency measurement.
 
 Timestamps are metadata and do not participate in event ID generation. The existing conditional write preserves the entire first stored record, including both timestamps, on duplicate delivery. Repeated API submissions may carry different receipt times but keep the same event ID. An older queued message without `received_at` is still processed: it gets `processed_at`, while the unknown receipt time is omitted. Existing database records are not backfilled. Clients cannot set `received_at` through `/ingest`; malformed timestamps in directly queued messages follow the normal retry/DLQ path.
+
+## Browse saved reports
+
+`GET /events` on the producer returns `events` and `next_cursor`. Try it in
+[the API explorer](http://localhost:8000/docs), or use:
+
+```sh
+curl 'http://localhost:8000/events?limit=25'
+# For another page, paste the previous response's next_cursor below:
+curl --get 'http://localhost:8000/events' --data-urlencode 'limit=25' --data-urlencode 'cursor=PASTE_NEXT_CURSOR_HERE'
+```
+
+Example response (illustrative data):
+
+```json
+{
+  "events": [{
+    "event_id": "sample-event",
+    "device_id": "router-42",
+    "event_type": "link_flap",
+    "payload": {"iface": "eth0"},
+    "received_at": "2026-09-30T10:00:00Z",
+    "processed_at": "2026-09-30T10:00:01Z"
+  }],
+  "next_cursor": null
+}
+```
+
+- `limit` defaults to 25 and must be 1–100. Each request performs one bounded DynamoDB scan; its 1 MB response limit may produce fewer reports than requested.
+- Pass `next_cursor` unchanged into the next request's `cursor` parameter. A null cursor ends traversal, including for an empty table. A short or empty page with a non-null cursor must still be followed.
+- Scan order is not chronological. Reads are eventually consistent and pagination is not a snapshot: concurrent writes may change the results seen during traversal. This is a small-demo browsing endpoint, not an efficient filtered or sorted query design.
+- Payloads are returned as JSON objects. Missing timestamps on older records are returned as null; records are not modified or backfilled.
+- Invalid cursors return 400; invalid limits or query lengths return 422. Database failures return 503, and malformed stored records return 500 with a generic message.
+- Cursors are validated continuation positions, not authorization tokens. The local endpoint has no authentication. Add access control before exposing it publicly.
+- The producer needs `dynamodb:Scan` on `TABLE_NAME` (default `telemetry-events`) when using real AWS. LocalStack uses the existing local credentials. The current API Gateway module still routes only ingestion; browse reports through the producer directly.
+
+To use updated code in the running local service, rebuild it with `docker compose up -d --build --wait producer` after the local resources have been set up.
